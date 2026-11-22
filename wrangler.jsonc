@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "teranga-dubai",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "observability": { "enabled": true },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "teranga-dubai", "database_id": "74f64ec7-8e65-44c3-8a0d-f461672bdf79", "migrations_dir": "migrations" }
+  ],
+  "vars": { "TURNSTILE_SITE_KEY": "0x4AAAAAAGNit8g_rqtWcCdB" }
+  // Secrets (wrangler secret put) : ADMIN_SETUP_CODE, SALT, TURNSTILE_SECRET
+}
