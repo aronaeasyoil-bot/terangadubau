@@ -6,7 +6,7 @@ export const BRAND = {
   name: "TERANGA DUBAI", signature: "Your African Travel Companion",
   phone: "+971 50 764 0753", wa: "https://wa.me/971507640753",
 };
-export const VERSION = "2026.11.22";
+export const VERSION = "2026.11.23";
 
 const T = {
   fr: {

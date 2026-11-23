@@ -169,7 +169,7 @@ export const SECURITY_HEADERS = {
   "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
   "Content-Security-Policy": [
     "default-src 'self'",
-    "img-src 'self' data: https://upload.wikimedia.org https://thumb.wikimedia.org",
+    "img-src 'self' data: https:",
     "script-src 'self' https://challenges.cloudflare.com",
     "frame-src https://challenges.cloudflare.com",
     "style-src 'self'",

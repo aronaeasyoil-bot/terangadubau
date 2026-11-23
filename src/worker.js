@@ -3,6 +3,7 @@ import { HttpError, fail, page, json, redirect, readForm, str, email as vEmail, 
 import { q, uid, throttle, audit, currentUser, startSession, clearCookie, register, login, requireRole, notify } from "./lib/auth.js";
 import { createRequest, loadForClient, clientAccept, clientCancel, adminTransition, adminQuote, adminConfirm, recordPayment, verifyPayment, createFoodOrder, foodTransition, STATUS } from "./lib/booking.js";
 import { SERVICES, SERVICE_KEYS } from "./data/services.js";
+import { hotelsMode, flightsMode, hotelQuery, flightQuery, searchHotels, searchFlights } from "./lib/suppliers.js";
 import { L } from "./views/layout.js";
 import * as P from "./views/public.js";
 import * as V from "./views/portal.js";
@@ -63,7 +64,7 @@ async function route(request, env, ctx) {
   }
   if (path === "/robots.txt") return new Response(`User-agent: *\nDisallow: /admin\nDisallow: /fr/account\nDisallow: /en/account\nDisallow: /fr/track\nDisallow: /en/track\nSitemap: ${SITE}/sitemap.xml\n`, { headers: { "Content-Type": "text/plain" } });
   if (path === "/sitemap.xml") return sitemap();
-  if (path === "/health") return json({ ok: true, db: !!env.DB, turnstile: !!env.TURNSTILE_SECRET });
+  if (path === "/health") return json({ ok: true, db: !!env.DB, turnstile: !!env.TURNSTILE_SECRET, hotels: hotelsMode(env) || "off", flights: flightsMode(env) || "off" });
   if (path.startsWith("/admin")) return adminRoutes(request, env, path, url, user);
 
   const [, lang, section, ...rest] = path.split("/");
@@ -78,7 +79,8 @@ async function route(request, env, ctx) {
   if (SERVICE_KEYS.includes(section) && !rest.length) {
     if (method === "POST") return submitService(request, env, lang, section, user);
     const vals = Object.fromEntries(url.searchParams);
-    return renderService(env, lang, section, user, vals);
+    const live = await liveSearch(request, env, section, vals);
+    return renderService(env, lang, section, user, vals, null, 200, live);
   }
   if (section === "food" && rest[0] === "order" && method === "POST") {
     const form = await readForm(request);
@@ -140,7 +142,27 @@ async function route(request, env, ctx) {
   return page(P.notFound(lang, user), { status: 404 });
 }
 
-async function renderService(env, lang, service, user, vals = {}, error = null, status = 200) {
+// Recherche en temps réel (hôtels LiteAPI, vols Duffel) : seulement si la clé existe et si le client a lancé la recherche.
+async function liveSearch(request, env, service, vals) {
+  const mode = service === "hotels" ? hotelsMode(env) : service === "flights" ? flightsMode(env) : null;
+  if (!mode) return null;
+  const live = { mode, searched: false, results: [], error: null, query: null };
+  if (vals.search !== "1") return live;
+  live.searched = true;
+  try {
+    await throttle(request, env, "search", 30);
+    const qy = service === "hotels" ? hotelQuery(vals) : await flightQuery(env, vals);
+    if (qy.error) { live.error = qy.error; return live; }
+    live.query = qy;
+    live.results = service === "hotels" ? await searchHotels(env, qy) : await searchFlights(env, qy);
+  } catch (e) {
+    live.error = e instanceof HttpError && e.code === "rate_limited" ? "rate_limited" : "supplier";
+    if (live.error === "supplier") console.error("live search", service, String(e?.message || e).slice(0, 200));
+  }
+  return live;
+}
+
+async function renderService(env, lang, service, user, vals = {}, error = null, status = 200, live = undefined) {
   if (service === "food") {
     const restaurants = (await q(env, "SELECT * FROM restaurants WHERE status='published' ORDER BY name").all()).results;
     const menus = {};
@@ -150,7 +172,8 @@ async function renderService(env, lang, service, user, vals = {}, error = null, 
   const offers = (await q(env, `SELECT o.* FROM offers o LEFT JOIN partners p ON p.id=o.partner_id
     WHERE o.service=? AND o.status='published' AND (o.partner_id IS NULL OR p.status='approved') ORDER BY o.updated_at DESC LIMIT 24`, service).all()).results;
   const packages = service === "packages" ? (await q(env, "SELECT * FROM packages WHERE status='published' ORDER BY sort").all()).results : [];
-  return page(P.servicePage(lang, env, service, { user, vals, error, offers, packages }), { status });
+  if (live === undefined && (service === "hotels" || service === "flights")) live = { mode: service === "hotels" ? hotelsMode(env) : flightsMode(env), searched: false, results: [] };
+  return page(P.servicePage(lang, env, service, { user, vals, error, offers, packages, live: live?.mode ? live : null }), { status });
 }
 
 async function submitService(request, env, lang, service, user) {

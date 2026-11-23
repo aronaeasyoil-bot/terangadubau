@@ -198,3 +198,10 @@ input:focus,select:focus,textarea:focus{border-color:var(--red);outline:2px soli
 .invoice img{margin-bottom:12px}
 @media print{.top,.foot,.wa-float,[data-print]{display:none!important}body{font-size:12pt}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+/* Recherche en temps réel */
+.live{margin:8px 0 28px}.live-form{margin-top:12px}
+.live-list{display:grid;gap:12px}@media (min-width:800px){.live-list{grid-template-columns:repeat(2,1fr)}}
+.live-card{padding:0;overflow:hidden;display:flex;flex-direction:column}.live-card img{width:100%;aspect-ratio:16/10;object-fit:cover;background:var(--grey)}
+.live-card .logo-air{width:28px;height:28px;aspect-ratio:auto;display:inline-block;vertical-align:middle;background:none}
+.live-b{padding:14px;display:flex;flex-direction:column;gap:6px;flex:1}.live-b h3{margin:0;font-size:1.05rem}.live-b .btn{margin-top:auto;align-self:flex-start}
+.live-b p{margin:0}.stars{color:#c99a00;font-size:.9rem;letter-spacing:1px}.leg{padding:6px 0;border-top:1px solid var(--line)}

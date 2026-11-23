@@ -4,6 +4,8 @@ import { SERVICES, SEARCH_TABS } from "../data/services.js";
 import { IMAGES, DISH_IMAGES } from "../data/images.js";
 import { DISHES, CUISINES } from "../data/food.js";
 import { STATUS, FOOD_STATUS } from "../lib/booking.js";
+import { isoDuration, hotelsMode, flightsMode } from "../lib/suppliers.js";
+const liveOn = (env, k) => (k === "hotels" ? hotelsMode(env) : k === "flights" ? flightsMode(env) : null) != null;
 
 const ERR = {
   missing_field: ["Merci de remplir tous les champs obligatoires.", "Please fill in all required fields."],
@@ -88,11 +90,11 @@ export function homePage(lang, env, { user, packages }) {
 
   <section id="search" class="search wrap" aria-label="${L(lang, "Moteur de recherche", "Search")}">
     <div class="tabs" role="tablist">${tabs.map(([k, s], i) => html`<button role="tab" type="button" id="tab-${k}" aria-controls="panel-${k}" aria-selected="${i === 0}" ${i ? raw('tabindex="-1"') : ""} data-tab="${k}"><span aria-hidden="true">${s.icon}</span> ${s[lang].name}</button>`)}</div>
-    ${tabs.map(([k, s], i) => html`<form role="tabpanel" id="panel-${k}" aria-labelledby="tab-${k}" class="panel" method="get" action="/${lang}/${k}#form" ${i ? raw("hidden") : ""}>
+    ${tabs.map(([k, s], i) => html`<form role="tabpanel" id="panel-${k}" aria-labelledby="tab-${k}" class="panel" method="get" action="/${lang}/${k}${liveOn(env, k) ? "#resultats" : "#form"}" ${i ? raw("hidden") : ""}>${liveOn(env, k) ? raw('<input type="hidden" name="search" value="1">') : ""}
       <div class="panel-fields">${s.fields.filter((f) => f.req).slice(0, 4).map((f) => field(lang, { ...f, req: false }, {}))}</div>
       <button class="btn btn-red" type="submit">${L(lang, "Rechercher", "Search")}</button>
     </form>`)}
-    <p class="muted small">${L(lang, "Aucune API de réservation instantanée n'est encore connectée : la recherche ouvre une demande traitée par notre équipe, qui vérifie les disponibilités réelles et vous répond avec un devis. Nous n'affichons jamais de résultats fictifs.", "No instant-booking API is connected yet: your search opens a request handled by our team, who check real availability and reply with a quote. We never show made-up results.")}</p>
+    <p class="muted small">${liveOn(env, "hotels") || liveOn(env, "flights") ? L(lang, "Hôtels et vols : tarifs en temps réel de nos fournisseurs, puis devis et confirmation par notre équipe. Autres services : votre recherche ouvre une demande, nous vérifions les disponibilités réelles et vous répondons avec un devis. Nous n'affichons jamais de résultats fictifs.", "Hotels and flights: live rates from our suppliers, then a quote and confirmation from our team. Other services: your search opens a request, we check real availability and reply with a quote. We never show made-up results.") : L(lang, "Aucune API de réservation instantanée n'est encore connectée : la recherche ouvre une demande traitée par notre équipe, qui vérifie les disponibilités réelles et vous répond avec un devis. Nous n'affichons jamais de résultats fictifs.", "No instant-booking API is connected yet: your search opens a request handled by our team, who check real availability and reply with a quote. We never show made-up results.")}</p>
   </section>
 
   <section id="services" class="wrap section">
@@ -140,12 +142,13 @@ export function homePage(lang, env, { user, packages }) {
 }
 
 // ---------- Pages de service ----------
-export function servicePage(lang, env, service, { user, vals, error, offers = [], packages = [] }) {
+export function servicePage(lang, env, service, { user, vals, error, offers = [], packages = [], live = null }) {
   const s = SERVICES[service], c = s[lang];
   const extra = service === "shopping" ? shoppingExtra(lang) : service === "activities" ? activitiesExtra(lang) : service === "packages" ? packagesExtra(lang, packages) : "";
   const body = html`${hero(lang, service, c.title, c.lead)}
   <div class="wrap section">
     ${extra}
+    ${live ? liveSection(lang, service, live, vals || {}) : ""}
     ${offers.length ? html`<h2 class="h2">${L(lang, "Offres de nos partenaires vérifiés", "Offers from verified partners")}</h2><div class="offers">${offers.map((o) => offerCard(lang, service, o))}</div>` : ""}
     <div class="formwrap" id="form">
       <div><h2 class="h2">${L(lang, "Faire une demande", "Make a request")}</h2>${onRequest(lang)}
@@ -155,6 +158,76 @@ export function servicePage(lang, env, service, { user, vals, error, offers = []
     </div>
   </div>`;
   return layout(lang, { title: c.title, description: c.lead, path: `/${lang}/${service}`, body, user, active: service });
+}
+
+// ---------- Recherche en temps réel (LiteAPI / Duffel) ----------
+const LIVE_ERR = {
+  dates: ["Vérifiez les dates : elles doivent être à venir, dans le bon ordre (30 nuits maximum pour les hôtels).", "Check the dates: they must be in the future and in order (30 nights max for hotels)."],
+  places: ["Ville ou aéroport introuvable. Indiquez le code de l'aéroport, par exemple Dakar (DSS).", "City or airport not found. Use the airport code, for example Dakar (DSS)."],
+  infants: ["Chaque bébé doit voyager avec un adulte.", "Each infant must travel with an adult."],
+  rate_limited: ["Trop de recherches. Réessayez dans quelques minutes.", "Too many searches. Try again in a few minutes."],
+  supplier: ["La recherche en ligne ne répond pas pour le moment. Envoyez votre demande ci-dessous, notre équipe s'en charge.", "Online search is not responding right now. Send your request below and our team will handle it."],
+};
+const money2 = (n, cur) => n.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " " + cur;
+const hm = (iso) => (iso || "").slice(11, 16);
+const dm = (iso) => (iso || "").slice(8, 10) + "/" + (iso || "").slice(5, 7);
+const LIVE_FIELDS = { hotels: ["area", "arrival", "departure", "adults", "rooms"], flights: ["trip", "from", "to", "arrival", "departure", "adults", "children", "infants", "cabin"] };
+
+function pickLink(lang, service, vals, note) {
+  const p = new URLSearchParams();
+  for (const [k, val] of Object.entries(vals)) if (val && !["search", "note", "offer_id"].includes(k) && k.length < 20) p.set(k, String(val).slice(0, 120));
+  p.set("note", note.slice(0, 900));
+  return `/${lang}/${service}?${p}#form`;
+}
+
+function liveSection(lang, service, live, vals) {
+  const s = SERVICES[service];
+  const test = live.mode === "test";
+  const form = html`<form class="card form live-form" method="get" action="/${lang}/${service}#resultats">
+    <input type="hidden" name="search" value="1">
+    <fieldset class="grid2"><legend>${service === "hotels" ? L(lang, "Voir les tarifs en temps réel", "See live rates") : L(lang, "Comparer les vols en temps réel", "Compare live flights")}</legend>
+    ${s.fields.filter((f) => LIVE_FIELDS[service].includes(f.name)).map((f) => field(lang, f, vals))}</fieldset>
+    <button class="btn btn-red btn-lg" type="submit">${L(lang, "Rechercher", "Search")}</button>
+  </form>`;
+  const banner = test ? html`<div class="alert" role="note"><strong>${L(lang, "Mode test du fournisseur", "Supplier test mode")}</strong> : ${L(lang, "les résultats ci-dessous sont des données de démonstration, ils ne sont pas réels et ne peuvent pas être réservés.", "the results below are demonstration data; they are not real and cannot be booked.")}</div>` : "";
+  let results = "";
+  if (live.searched) {
+    if (live.error) results = html`<div class="alert" role="alert">${L(lang, ...LIVE_ERR[live.error] || LIVE_ERR.supplier)}</div>`;
+    else if (!live.results.length) results = html`<div class="notice"><strong>${L(lang, "Aucun résultat disponible pour ces critères.", "No results available for these criteria.")}</strong><p>${L(lang, "Modifiez vos dates ou envoyez une demande : notre équipe cherche aussi auprès de ses partenaires.", "Change your dates or send a request: our team also searches with its partners.")}</p></div>`;
+    else results = html`<p class="muted small">${live.results.length} ${L(lang, "résultat(s)", "result(s)")}. ${service === "hotels"
+      ? L(lang, "Prix total du séjour, taxes du fournisseur incluses ; la taxe touristique de Dubaï (Tourism Dirham) peut s'ajouter sur place.", "Total stay price including supplier taxes; Dubai's Tourism Dirham fee may be charged at the hotel.")
+      : L(lang, "Prix total pour tous les passagers, taxes incluses.", "Total price for all passengers, taxes included.")}
+      ${L(lang, " Tarifs du moment, non garantis tant que la réservation n'est pas confirmée.", " Current fares, not guaranteed until the booking is confirmed.")}</p>
+      <div class="live-list">${live.results.map((r) => service === "hotels" ? hotelCard(lang, r, vals, test) : flightCard(lang, r, vals, test))}</div>`;
+  }
+  return html`<section class="live" id="resultats">
+    <h2 class="h2">${service === "hotels" ? L(lang, "Disponibilités et tarifs en ligne", "Online availability and rates") : L(lang, "Vols disponibles en ligne", "Flights available online")}</h2>
+    <p>${L(lang, "Les tarifs viennent directement de notre fournisseur", "Rates come straight from our supplier")} (${service === "hotels" ? "LiteAPI" : "Duffel"}). ${L(lang, "Choisissez une offre : elle est jointe à votre demande, nous vérifions puis vous envoyons le devis. Aucun paiement n'est demandé à cette étape.", "Pick an offer: it is attached to your request, we check it and send you the quote. No payment is taken at this step.")}</p>
+    ${banner}${form}${results}</section>`;
+}
+
+function hotelCard(lang, h, vals, test) {
+  const stars = h.stars ? "★".repeat(Math.min(5, Math.round(h.stars))) : "";
+  const note = `${L(lang, "Offre choisie en ligne", "Offer picked online")}${test ? " [TEST]" : ""} : ${h.name}${h.stars ? ` (${h.stars}★)` : ""} · ${h.room}${h.board ? " · " + h.board : ""} · ${h.nights} ${L(lang, "nuit(s)", "night(s)")} · ${money2(h.amount, h.currency)} · ${h.refundable ? L(lang, "remboursable", "refundable") : L(lang, "non remboursable", "non-refundable")} · LiteAPI ${h.id}`;
+  return html`<article class="card live-card">
+    ${h.photo && /^https:\/\//.test(h.photo) ? raw(`<img src="${esc(h.photo)}" alt="" loading="lazy" width="320" height="200" referrerpolicy="no-referrer">`) : ""}
+    <div class="live-b"><h3>${h.name} <span class="stars" aria-label="${h.stars || ""} ${L(lang, "étoiles", "stars")}">${stars}</span></h3>
+    ${h.address ? html`<p class="muted small">${h.address}</p>` : ""}
+    ${h.rating ? html`<p class="small">${L(lang, "Note", "Rating")} ${h.rating}/10${h.reviews ? html` · ${h.reviews} ${L(lang, "avis", "reviews")}` : ""}</p>` : ""}
+    <p class="small">${h.room}${h.board ? " · " + h.board : ""} · <b>${h.refundable ? L(lang, "Annulation possible (conditions)", "Cancellable (terms apply)") : L(lang, "Non remboursable", "Non-refundable")}</b></p>
+    <p class="price">${money2(h.amount, h.currency)} <span class="muted small">${L(lang, "pour", "for")} ${h.nights} ${L(lang, "nuit(s)", "night(s)")}</span></p>
+    <a class="btn btn-red" href="${pickLink(lang, "hotels", vals, note)}">${L(lang, "Choisir cet hôtel", "Choose this hotel")}</a></div></article>`;
+}
+
+function flightCard(lang, f, vals, test) {
+  const slice = (s) => html`<div class="leg"><b>${hm(s.dep)}</b> ${s.from} → <b>${hm(s.arr)}</b> ${s.to} <span class="muted small">${dm(s.dep)} · ${isoDuration(s.duration)} · ${s.stops ? `${s.stops} ${L(lang, "escale(s)", "stop(s)")} (${s.via})` : L(lang, "direct", "direct")}</span><br><span class="muted small">${s.flights}${s.bags != null ? ` · ${s.bags} ${L(lang, "bagage(s) en soute", "checked bag(s)")}` : ""}</span></div>`;
+  const note = `${L(lang, "Vol choisi en ligne", "Flight picked online")}${test ? " [TEST]" : ""} : ${f.airline} · ${f.slices.map((s) => `${s.from}-${s.to} ${dm(s.dep)} ${hm(s.dep)} ${s.flights}`).join(" | ")} · ${money2(f.amount, f.currency)} · Duffel ${f.id}`;
+  return html`<article class="card live-card flight">
+    <div class="live-b"><h3>${f.logo && /^https:\/\//.test(f.logo) ? raw(`<img class="logo-air" src="${esc(f.logo)}" alt="" width="28" height="28" referrerpolicy="no-referrer"> `) : ""}${f.airline}</h3>
+    ${f.slices.map(slice)}
+    <p class="small">${f.refundable ? L(lang, "Remboursable avant le départ (frais possibles)", "Refundable before departure (fees may apply)") : L(lang, "Non remboursable", "Non-refundable")} · ${f.changeable ? L(lang, "modifiable", "changeable") : L(lang, "non modifiable", "not changeable")}</p>
+    <p class="price">${money2(f.amount, f.currency)}</p>
+    <a class="btn btn-red" href="${pickLink(lang, "flights", vals, note)}">${L(lang, "Choisir ce vol", "Choose this flight")}</a></div></article>`;
 }
 
 function offerCard(lang, service, o) {

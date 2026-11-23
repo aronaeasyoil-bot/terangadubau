@@ -19,8 +19,10 @@ Aucun secret n'est affiché ici ni dans le dépôt.
 
 | Intégration | Constat | Ce qu'il faut faire |
 |---|---|---|
-| LiteAPI (hôtels) | La clé `LITEAPI_KEY` existe sur le Worker **noor-travel**. Les secrets Cloudflare ne sont pas lisibles, on ne peut pas la copier. | `npx wrangler secret put LITEAPI_KEY` sur `teranga-dubai`, puis brancher la recherche (le module Hôtels passe déjà par le parcours demande → devis). |
-| Duffel (vols) | `DUFFEL_ACCESS_TOKEN` existe sur **noor-travel**, même limite. Vérifier aussi s'il s'agit d'un jeton test ou live et si l'émission de billets est autorisée. | `npx wrangler secret put DUFFEL_ACCESS_TOKEN` sur `teranga-dubai`. |
+| LiteAPI (hôtels) | Code prêt (`src/lib/suppliers.js`) : recherche de tarifs en temps réel sur `/fr/hotels`. S'active dès que le secret `LITEAPI_KEY` existe sur `teranga-dubai`. La clé du Worker noor-travel n'est pas lisible (secret Cloudflare). | Ajouter le secret `LITEAPI_KEY` (Workers & Pages → teranga-dubai → Settings → Variables and Secrets). Clé `sand_…` = mode test, affiché comme tel. |
+| Duffel (vols) | Code prêt : recherche d'offres en temps réel sur `/fr/flights`. S'active avec le secret `DUFFEL_ACCESS_TOKEN`. Jeton `duffel_test_…` = mode test, affiché comme tel. | Ajouter le secret `DUFFEL_ACCESS_TOKEN`. |
+
+Recherche uniquement : aucune réservation ni émission de billet n'est déclenchée par le site. L'offre choisie est jointe à la demande du client ; l'équipe vérifie, envoie le devis, puis réserve chez le fournisseur après paiement vérifié. `/health` indique `hotels` / `flights` : `off`, `test` ou `live`.
 | Ancien Worker `teranga-dubai-staging` + D1 `teranga-dubai-staging` | Prototype précédent (données de test uniquement). Non utilisé, non supprimé. | À supprimer quand vous le souhaitez. |
 | Worker `teranga-dubai-rentals` | Vide (aucun binding). Non utilisé. | À supprimer ou réutiliser. |
 
